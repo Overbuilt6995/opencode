@@ -9,7 +9,8 @@ import { Database } from "@/storage/db"
 import { eq } from "drizzle-orm"
 import * as Log from "@opencode-ai/core/util/log"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
-import { Deferred, Effect, Layer, Schema, Context } from "effect"
+import { Plugin } from "@/plugin"
+import { Deferred, Effect, Exit, Layer, Schema, Context } from "effect"
 import os from "os"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { PermissionID } from "./schema"
@@ -145,6 +146,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
+    const plugin = yield* Plugin.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         const row = Database.use((db) =>
@@ -198,6 +200,24 @@ export const layer = Layer.effect(
         tool: request.tool,
       }
       log.info("asking", { id, permission: info.permission, patterns: info.patterns })
+
+      const hookExit = yield* plugin
+        .trigger("permission.ask", info, {
+          status: "ask" as const,
+          message: undefined as string | undefined,
+        })
+        .pipe(Effect.exit)
+      const hook = Exit.isSuccess(hookExit)
+        ? hookExit.value
+        : (() => {
+            log.warn("permission.ask hook failed", { cause: hookExit.cause })
+            return { status: "ask" as const, message: undefined }
+          })()
+      if (hook.status === "deny") {
+        if (hook.message) return yield* new CorrectedError({ feedback: hook.message })
+        return yield* new RejectedError()
+      }
+      if (hook.status === "allow") return
 
       const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
       pending.set(id, { info, deferred })
@@ -307,6 +327,6 @@ export function disabled(tools: string[], ruleset: Ruleset): Set<string> {
   return PermissionV2.disabled(tools, ruleset)
 }
 
-export const defaultLayer = layer.pipe(Layer.provide(Bus.layer))
+export const defaultLayer = layer.pipe(Layer.provide(Bus.layer), Layer.provide(Plugin.defaultLayer))
 
 export * as Permission from "."

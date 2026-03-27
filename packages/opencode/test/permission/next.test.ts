@@ -1,8 +1,11 @@
 import { test, expect } from "bun:test"
 import os from "os"
+import path from "path"
+import { pathToFileURL } from "url"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { Bus } from "../../src/bus"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { Plugin } from "../../src/plugin"
 import { Permission } from "../../src/permission"
 import { PermissionID } from "../../src/permission/schema"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
@@ -14,7 +17,7 @@ import { MessageID, SessionID } from "../../src/session/schema"
 const bus = Bus.layer
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const env = Layer.mergeAll(
-  Permission.layer.pipe(Layer.provide(bus)),
+  Permission.layer.pipe(Layer.provide(bus), Layer.provide(Plugin.defaultLayer)),
   bus,
   CrossSpawnSpawner.defaultLayer,
   InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
@@ -73,6 +76,23 @@ const list = () =>
   Effect.gen(function* () {
     const permission = yield* Permission.Service
     return yield* permission.list()
+  })
+
+const writePermissionHookPlugin = (dir: string, source: string) =>
+  Effect.promise(async () => {
+    const file = path.join(dir, "permission-hook-plugin.ts")
+    await Bun.write(file, source)
+    await Bun.write(
+      path.join(dir, "opencode.json"),
+      JSON.stringify(
+        {
+          $schema: "https://opencode.ai/config.json",
+          plugin: [pathToFileURL(file).href],
+        },
+        null,
+        2,
+      ),
+    )
   })
 
 // fromConfig tests
@@ -1159,4 +1179,115 @@ it.instance(
       if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.RejectedError)
     }),
   { git: true },
+)
+
+it.live("ask - permission.ask hook allow bypasses prompt", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped({ git: true })
+    yield* writePermissionHookPlugin(
+      dir,
+      `export default async () => ({ "permission.ask": async (_input, output) => { output.status = "allow" } })`,
+    )
+    const store = yield* InstanceStore.Service
+    yield* store.provide(
+      { directory: dir },
+      Effect.gen(function* () {
+        const result = yield* ask({
+          sessionID: SessionID.make("session_hook_allow"),
+          permission: "bash",
+          patterns: ["ls"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        expect(result).toBeUndefined()
+        expect(yield* list()).toHaveLength(0)
+      }),
+    )
+  }),
+)
+
+it.live("ask - permission.ask hook deny rejects without prompt", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped({ git: true })
+    yield* writePermissionHookPlugin(
+      dir,
+      `export default async () => ({ "permission.ask": async (_input, output) => { output.status = "deny" } })`,
+    )
+    const store = yield* InstanceStore.Service
+    yield* store.provide(
+      { directory: dir },
+      Effect.gen(function* () {
+        const err = yield* fail(
+          ask({
+            sessionID: SessionID.make("session_hook_deny"),
+            permission: "bash",
+            patterns: ["ls"],
+            metadata: {},
+            always: [],
+            ruleset: [],
+          }),
+        )
+        expect(err).toBeInstanceOf(Permission.RejectedError)
+        expect(yield* list()).toHaveLength(0)
+      }),
+    )
+  }),
+)
+
+it.live("ask - permission.ask hook deny with message returns corrected error", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped({ git: true })
+    yield* writePermissionHookPlugin(
+      dir,
+      `export default async () => ({ "permission.ask": async (_input, output) => { output.status = "deny"; output.message = "blocked by policy" } })`,
+    )
+    const store = yield* InstanceStore.Service
+    yield* store.provide(
+      { directory: dir },
+      Effect.gen(function* () {
+        const err = yield* fail(
+          ask({
+            sessionID: SessionID.make("session_hook_deny_msg"),
+            permission: "bash",
+            patterns: ["ls"],
+            metadata: {},
+            always: [],
+            ruleset: [],
+          }),
+        )
+        expect(err).toBeInstanceOf(Permission.CorrectedError)
+        expect(String(err)).toContain("blocked by policy")
+        expect(yield* list()).toHaveLength(0)
+      }),
+    )
+  }),
+)
+
+it.live("ask - permission.ask hook failure falls back to prompt", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped({ git: true })
+    yield* writePermissionHookPlugin(
+      dir,
+      `export default async () => ({ "permission.ask": async () => { throw new Error("plugin boom") } })`,
+    )
+    const store = yield* InstanceStore.Service
+    yield* store.provide(
+      { directory: dir },
+      Effect.gen(function* () {
+        const fiber = yield* ask({
+          sessionID: SessionID.make("session_hook_error"),
+          permission: "bash",
+          patterns: ["ls"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        }).pipe(Effect.forkScoped)
+
+        expect(yield* waitForPending(1)).toHaveLength(1)
+        yield* rejectAll()
+        yield* Fiber.await(fiber)
+      }),
+    )
+  }),
 )
