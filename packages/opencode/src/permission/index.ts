@@ -2,7 +2,8 @@ import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { InstanceState } from "@/effect/instance-state"
 import * as Log from "@opencode-ai/core/util/log"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
-import { Deferred, Effect, Layer, Context } from "effect"
+import { Plugin } from "@/plugin"
+import { Deferred, Effect, Exit, Layer, Context } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -56,6 +57,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const plugin = yield* Plugin.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -107,6 +109,24 @@ export const layer = Layer.effect(
         tool: request.tool,
       }
       log.info("asking", { id, permission: info.permission, patterns: info.patterns })
+
+      const hookExit = yield* plugin
+        .trigger("permission.ask", info, {
+          status: "ask" as const,
+          message: undefined as string | undefined,
+        })
+        .pipe(Effect.exit)
+      const hook = Exit.isSuccess(hookExit)
+        ? hookExit.value
+        : (() => {
+            log.warn("permission.ask hook failed", { cause: hookExit.cause })
+            return { status: "ask" as const, message: undefined }
+          })()
+      if (hook.status === "deny") {
+        if (hook.message) return yield* new PermissionV1.CorrectedError({ feedback: hook.message })
+        return yield* new PermissionV1.RejectedError()
+      }
+      if (hook.status === "allow") return
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
       pending.set(id, { info, deferred })
@@ -225,6 +245,6 @@ export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<st
   )
 }
 
-export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer))
+export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer), Layer.provide(Plugin.defaultLayer))
 
 export * as Permission from "."

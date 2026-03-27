@@ -1033,6 +1033,52 @@ describe("tool.shell permissions", () => {
       )
     }),
   )
+
+  each("includes raw command in metadata", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped({ git: true })
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const requests: Array<Omit<Permission.Request, "id" | "sessionID" | "tool">> = []
+          yield* run(
+            {
+              command: "echo hello",
+              description: "Echo",
+            },
+            capture(requests),
+          )
+          const req = requests.find((r) => r.permission === "bash")
+          expect(req).toBeDefined()
+          expect(req!.metadata.command).toBe("echo hello")
+        }),
+      )
+    }),
+  )
+
+  each("metadata.command is the full unparsed command for pipelines", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped({ git: true })
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const requests: Array<Omit<Permission.Request, "id" | "sessionID" | "tool">> = []
+          const cmd = "git log --oneline | head -5"
+          yield* run(
+            {
+              command: cmd,
+              description: "Git log piped",
+            },
+            capture(requests),
+          )
+          const req = requests.find((r) => r.permission === "bash")
+          expect(req).toBeDefined()
+          expect(req!.patterns.length).toBeGreaterThan(1)
+          expect(req!.metadata.command).toBe(cmd)
+        }),
+      )
+    }),
+  )
 })
 
 describe("tool.shell abort", () => {
