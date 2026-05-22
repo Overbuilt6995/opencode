@@ -21,6 +21,7 @@ import {
   sanitizedProcessEnv,
 } from "@opencode-ai/core/util/opencode-process"
 import { validateSession } from "./validate-session"
+import { Database } from "@/storage/db"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -255,7 +256,8 @@ export const TuiThreadCommand = cmd({
     } finally {
       unguard?.()
     }
-    process.exit(0)
+    try { Database.close() } catch {}
+    process.exit()
   },
 })
 // scratch

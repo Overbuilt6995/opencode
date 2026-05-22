@@ -243,6 +243,8 @@ try {
   }
   process.exitCode = 1
 } finally {
+  // Ensure database is cleanly closed before exiting to prevent Bun NAPI FATAL ERROR.
+  try { Database.close() } catch {}
   // Some subprocesses don't react properly to SIGTERM and similar signals.
   // Most notably, some docker-container-based MCP servers don't handle such signals unless
   // run using `docker run --init`.

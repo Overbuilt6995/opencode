@@ -97,6 +97,11 @@ function shutdown(renderer: CliRenderer): void {
   if (!renderer.isDestroyed) {
     renderer.destroy()
   }
+
+  // Restore stdin to cooked mode so the shell is usable after the renderer shuts down
+  if (process.stdin.isTTY) {
+    try { process.stdin.setRawMode(false) } catch {}
+  }
 }
 
 function splashInfo(title: string | undefined, history: RunPrompt[]) {
