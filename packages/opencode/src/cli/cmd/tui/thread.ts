@@ -260,6 +260,9 @@ export const TuiThreadCommand = cmd({
       unguard?.()
     }
     try { Database.close() } catch {}
+    // Yield one event-loop tick so Bun's NAPI runtime can drain sqlite cleanup
+    // callbacks before process.exit() tears down NAPI references.
+    await new Promise((resolve) => setTimeout(resolve, 0))
     process.exit()
   },
 })

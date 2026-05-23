@@ -200,10 +200,14 @@ try {
   }
   process.exitCode = 1
 } finally {
+  // Ensure database is cleanly closed before exiting to prevent Bun NAPI FATAL ERROR.
+  try { Database.close() } catch {}
+  // Yield one event-loop tick so Bun's NAPI runtime can drain sqlite cleanup
+  // callbacks before process.exit() tears down NAPI references.
+  await new Promise((resolve) => setTimeout(resolve, 0))
   // Some subprocesses don't react properly to SIGTERM and similar signals.
   // Most notably, some docker-container-based MCP servers don't handle such signals unless
   // run using `docker run --init`.
   // Explicitly exit to avoid any hanging subprocesses.
-  try { Database.close() } catch {}
   process.exit()
 }
