@@ -87,20 +87,20 @@ export type Lifecycle = {
 // back to passthrough before leaving split-footer mode, so pending stdout
 // doesn't get captured into the now-dead scrollback pipeline.
 function shutdown(renderer: CliRenderer): void {
-  if (renderer.isDestroyed) {
-    return
-  }
-
-  if (renderer.externalOutputMode === "capture-stdout") {
-    renderer.externalOutputMode = "passthrough"
-  }
-
-  if (renderer.screenMode === "split-footer") {
-    renderer.screenMode = "main-screen"
-  }
-
   if (!renderer.isDestroyed) {
+    if (renderer.externalOutputMode === "capture-stdout") {
+      renderer.externalOutputMode = "passthrough"
+    }
+
+    if (renderer.screenMode === "split-footer") {
+      renderer.screenMode = "main-screen"
+    }
+
     renderer.destroy()
+  }
+
+  if (process.stdin.isTTY) {
+    try { process.stdin.setRawMode(false) } catch {}
   }
 }
 

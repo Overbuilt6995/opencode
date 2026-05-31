@@ -12,6 +12,7 @@ import { Filesystem } from "@/util/filesystem"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
+import { Database } from "@/storage/db"
 import { writeHeapSnapshot } from "v8"
 import {
   OPENCODE_PROCESS_ROLE,
@@ -258,7 +259,8 @@ export const TuiThreadCommand = cmd({
     } finally {
       unguard?.()
     }
-    process.exit(0)
+    try { Database.close() } catch {}
+    process.exit()
   },
 })
 // scratch
