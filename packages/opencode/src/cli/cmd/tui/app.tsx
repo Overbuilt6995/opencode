@@ -289,6 +289,30 @@ async function mountTui(input: TuiInput & { keymap: ReturnType<typeof createDefa
   }, renderer)
 }
 
+const MOUSE_RESET =
+  "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1049l\x1b[?25h\x1b[0m"
+
+function resetTerminalBeforeDestroy(renderer: CliRenderer) {
+  try {
+    renderer.setTerminalTitle("")
+  } catch {}
+  // Disable mouse tracking before destroying renderer.
+  // Must use the setter (not _useMouse directly) to trigger
+  // the native disableMouse FFI which emits ANSI reset codes.
+  // Raw stdout.write as safety net in case setter throws.
+  try {
+    renderer.useMouse = false
+  } catch {}
+  try {
+    process.stdout.write(MOUSE_RESET)
+  } catch {}
+  if (process.stdin.isTTY) {
+    try {
+      process.stdin.setRawMode(false)
+    } catch {}
+  }
+}
+
 function createTuiLifecycle(input: {
   renderer: CliRenderer
   unguard?: () => void
@@ -324,7 +348,7 @@ function createTuiLifecycle(input: {
     exiting = true
     await cleanup()
     if (!input.renderer.isDestroyed) {
-      input.renderer.setTerminalTitle("")
+      resetTerminalBeforeDestroy(input.renderer)
       input.renderer.destroy()
     }
     win32FlushInputBuffer()
@@ -342,6 +366,7 @@ function createTuiLifecycle(input: {
 
   input.renderer.once("destroy", () => {
     if (exiting) return
+    resetTerminalBeforeDestroy(input.renderer)
     void cleanup().finally(() => {
       win32FlushInputBuffer()
       completeExit()
@@ -355,7 +380,10 @@ function createTuiLifecycle(input: {
     async fail(error) {
       exiting = true
       await cleanup().catch(() => {})
-      if (!input.renderer.isDestroyed) input.renderer.destroy()
+      if (!input.renderer.isDestroyed) {
+        resetTerminalBeforeDestroy(input.renderer)
+        input.renderer.destroy()
+      }
       completeExit()
       throw error
     },
