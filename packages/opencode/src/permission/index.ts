@@ -201,13 +201,9 @@ export const layer = Layer.effect(
       }
       log.info("asking", { id, permission: info.permission, patterns: info.patterns })
 
-      const hookExit = yield* plugin
-        .trigger("permission.ask", info, {
-          status: "ask" as const,
-          message: undefined as string | undefined,
-        })
-        .pipe(Effect.exit)
-      const hook = Exit.isSuccess(hookExit)
+      const hookOutput: { status: "ask" | "deny" | "allow"; message?: string } = { status: "ask" }
+      const hookExit = yield* plugin.trigger("permission.ask", info, hookOutput).pipe(Effect.exit)
+      const hook: { status: "ask" | "deny" | "allow"; message?: string } = Exit.isSuccess(hookExit)
         ? hookExit.value
         : (() => {
             log.warn("permission.ask hook failed", { cause: hookExit.cause })
