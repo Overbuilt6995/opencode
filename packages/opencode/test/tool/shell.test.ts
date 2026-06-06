@@ -9,7 +9,6 @@ import { Shell } from "../../src/shell/shell"
 import { ShellTool } from "../../src/tool/shell"
 import { Filesystem } from "@/util/filesystem"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
-import type { Permission } from "../../src/permission"
 import { Agent } from "../../src/agent/agent"
 import { Truncate } from "@/tool/truncate"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -1040,7 +1039,7 @@ describe("tool.shell permissions", () => {
       yield* runIn(
         tmp,
         Effect.gen(function* () {
-          const requests: Array<Omit<Permission.Request, "id" | "sessionID" | "tool">> = []
+          const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
           yield* run(
             {
               command: "echo hello",
@@ -1062,7 +1061,7 @@ describe("tool.shell permissions", () => {
       yield* runIn(
         tmp,
         Effect.gen(function* () {
-          const requests: Array<Omit<Permission.Request, "id" | "sessionID" | "tool">> = []
+          const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
           const cmd = "git log --oneline | head -5"
           yield* run(
             {

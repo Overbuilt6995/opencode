@@ -12,7 +12,6 @@ import { Filesystem } from "@/util/filesystem"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
-import { Database } from "@/storage/db"
 import { writeHeapSnapshot } from "v8"
 import {
   OPENCODE_PROCESS_ROLE,
@@ -259,7 +258,6 @@ export const TuiThreadCommand = cmd({
     } finally {
       unguard?.()
     }
-    try { Database.close() } catch {}
     // Yield one event-loop tick so Bun's NAPI runtime can drain sqlite cleanup
     // callbacks before process.exit() tears down NAPI references.
     await new Promise((resolve) => setTimeout(resolve, 0))
