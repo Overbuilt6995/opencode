@@ -2,11 +2,12 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { InstanceState } from "@/effect/instance-state"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
-import { Deferred, Effect, Layer, Context } from "effect"
+import { Deferred, Effect, Exit, Layer, Context } from "effect"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Plugin } from "@/plugin"
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -54,6 +55,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const plugin = yield* Plugin.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -105,6 +107,33 @@ export const layer = Layer.effect(
         tool: request.tool,
       }
       yield* Effect.logInfo("asking", { id, permission: info.permission, patterns: info.patterns })
+
+      // Plugin hook: allow plugins to intercept permission requests
+      const triggerOutput: { status: "ask" | "deny" | "allow"; message?: string } = { status: "ask" }
+      const hookExit = yield* plugin
+        .trigger("permission.ask", {
+          id: info.id,
+          type: info.permission,
+          pattern: info.patterns.length === 1 ? info.patterns[0] : info.patterns,
+          sessionID: info.sessionID,
+          messageID: info.tool?.messageID ?? "",
+          callID: info.tool?.callID,
+          title: `Permission: ${info.permission}`,
+          metadata: info.metadata as Record<string, unknown>,
+          time: { created: Date.now() },
+        }, triggerOutput)
+        .pipe(Effect.exit)
+      const hookResult: { status: "ask" | "deny" | "allow"; message?: string } = Exit.isSuccess(hookExit)
+        ? hookExit.value
+        : (yield* Effect.logWarning("permission.ask hook error, falling back to prompt", { error: hookExit.cause }),
+           { status: "ask" })
+
+      if (hookResult.status === "allow") return
+      if (hookResult.status === "deny") {
+        return yield* hookResult.message
+          ? new PermissionV1.CorrectedError({ feedback: hookResult.message })
+          : new PermissionV1.RejectedError()
+      }
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
       pending.set(id, { info, deferred })
@@ -224,8 +253,11 @@ export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<st
   )
 }
 
-export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(Plugin.defaultLayer),
+)
 
-export const node = LayerNode.make(layer, [EventV2Bridge.node])
+export const node = LayerNode.make(layer, [EventV2Bridge.node, Plugin.node])
 
 export * as Permission from "."
