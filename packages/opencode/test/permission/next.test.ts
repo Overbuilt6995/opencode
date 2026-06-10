@@ -6,16 +6,25 @@ import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Database } from "@opencode-ai/core/database/database"
 import { Permission } from "../../src/permission"
+import { Plugin } from "../../src/plugin"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { TestInstance, tmpdirScoped } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 
 const events = EventV2Bridge.defaultLayer
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
+const noopPlugin = Layer.succeed(
+  Plugin.Service,
+  Plugin.Service.of({
+    trigger: (_name: any, _input: any, output: any) => Effect.succeed(output),
+    list: () => Effect.succeed([]),
+    init: () => Effect.void,
+  }),
+)
 const env = Layer.mergeAll(
-  Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events)),
+  Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events), Layer.provide(noopPlugin)),
   events,
   CrossSpawnSpawner.defaultLayer,
   InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
@@ -1172,5 +1181,139 @@ it.instance(
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV1.RejectedError)
     }),
+  { git: true },
+)
+
+// Plugin hook tests
+
+function makeMockPlugin(trigger: (_name: any, _input: any, output: any) => Effect.Effect<any, never, never>) {
+  return Plugin.Service.of({
+    trigger,
+    list: () => Effect.succeed([]),
+    init: () => Effect.void,
+  })
+}
+
+function pluginEnv(plugin: Plugin.Interface) {
+  const pluginLayer = Layer.succeed(Plugin.Service, plugin)
+  return Layer.mergeAll(
+    Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events), Layer.provide(pluginLayer)),
+    events,
+    CrossSpawnSpawner.defaultLayer,
+    InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
+  )
+}
+
+// Test 1: hook allows → bypass prompt
+const itAllow = testEffect(pluginEnv(makeMockPlugin((_name, _input, output) => {
+  output.status = "allow"
+  return Effect.succeed(output)
+})))
+itAllow.instance("permission.ask hook - allow bypasses prompt", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const result = yield* permission.ask({
+      sessionID: SessionID.make("session_hook_allow"),
+      permission: "bash",
+      patterns: ["ls"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    })
+    expect(result).toBeUndefined()
+  }),
+  { git: true },
+)
+
+// Test 2: hook denies → RejectedError
+const itDeny = testEffect(pluginEnv(makeMockPlugin((_name, _input, output) => {
+  output.status = "deny"
+  return Effect.succeed(output)
+})))
+itDeny.instance("permission.ask hook - deny rejects without prompt", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const exit = yield* permission
+      .ask({
+        sessionID: SessionID.make("session_hook_deny"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      })
+      .pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV1.RejectedError)
+    }
+  }),
+  { git: true },
+)
+
+// Test 3: hook denies with message → CorrectedError
+const itDenyMsg = testEffect(pluginEnv(makeMockPlugin((_name, _input, output) => {
+  output.status = "deny"
+  output.message = "Use safer command"
+  return Effect.succeed(output)
+})))
+itDenyMsg.instance("permission.ask hook - deny with message returns CorrectedError", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const exit = yield* permission
+      .ask({
+        sessionID: SessionID.make("session_hook_deny_msg"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      })
+      .pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      const err = Cause.squash(exit.cause)
+      expect(err).toBeInstanceOf(PermissionV1.CorrectedError)
+      expect(String(err)).toContain("Use safer command")
+    }
+  }),
+  { git: true },
+)
+
+// Test 4: hook throws → falls back to normal prompt flow
+const itThrow = testEffect(pluginEnv(makeMockPlugin(() => Effect.die(new Error("hook crashed")))))
+itThrow.instance("permission.ask hook - throw falls back to normal prompt flow", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const fiber = yield* permission
+      .ask({
+        sessionID: SessionID.make("session_hook_throw"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      })
+      .pipe(Effect.forkScoped)
+
+    const pending = yield* pollWithTimeout(
+      Effect.gen(function* () {
+        const list = yield* permission.list()
+        return list.length > 0 ? list : undefined
+      }),
+      "timed out waiting for pending request after hook throw",
+    )
+    expect(pending).toHaveLength(1)
+
+    yield* permission.reply({
+      requestID: pending[0].id,
+      reply: "reject",
+    })
+    const exit = yield* Fiber.await(fiber)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV1.RejectedError)
+    }
+  }),
   { git: true },
 )
