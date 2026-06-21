@@ -157,3 +157,54 @@ it.effect("subagent inherits parent session deny rules as hard runtime ceilings"
     expect(Permission.evaluate("bash", "git status", effective).action).toBe("deny")
   }),
 )
+
+it.effect("derived subagent session permission includes question deny", () =>
+  Effect.sync(() => {
+    const worker = testAgent({
+      name: "worker",
+      mode: "subagent",
+      permission: { bash: "allow" },
+    })
+    const derived = deriveSubagentSessionPermission({
+      parentSessionPermission: [],
+      subagent: worker,
+    })
+    const effective = Permission.merge(worker.permission, derived)
+
+    expect(Permission.evaluate("question", "*", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("parent question allow does not override subagent question deny", () =>
+  Effect.sync(() => {
+    const worker = testAgent({
+      name: "worker",
+      mode: "subagent",
+      permission: { bash: "allow" },
+    })
+    const derived = deriveSubagentSessionPermission({
+      parentSessionPermission: Permission.fromConfig({ question: "allow" }),
+      subagent: worker,
+    })
+    const effective = Permission.merge(worker.permission, derived)
+
+    expect(Permission.evaluate("question", "*", effective).action).toBe("deny")
+  }),
+)
+
+it.effect("parent question deny and derived question deny coexist harmlessly", () =>
+  Effect.sync(() => {
+    const worker = testAgent({
+      name: "worker",
+      mode: "subagent",
+      permission: { bash: "allow" },
+    })
+    const derived = deriveSubagentSessionPermission({
+      parentSessionPermission: Permission.fromConfig({ question: "deny" }),
+      subagent: worker,
+    })
+    const effective = Permission.merge(worker.permission, derived)
+
+    expect(Permission.evaluate("question", "*", effective).action).toBe("deny")
+  }),
+)

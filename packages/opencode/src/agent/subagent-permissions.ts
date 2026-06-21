@@ -8,7 +8,9 @@ import type { Agent } from "./agent"
  * 1. The parent session's deny rules and external_directory rules.
  *    Parent agent restrictions only govern that agent; the subagent's own
  *    permissions determine its capabilities.
- * 2. Default `todowrite` and `task` denies if the subagent's own ruleset
+ * 2. Unconditional `question` deny — subagents must never ask the user;
+ *    they report ambiguity/blockers back to the orchestrator instead.
+ * 3. Default `todowrite` and `task` denies if the subagent's own ruleset
  *    doesn't already permit them.
  */
 export function deriveSubagentSessionPermission(input: {
@@ -21,6 +23,7 @@ export function deriveSubagentSessionPermission(input: {
     ...input.parentSessionPermission.filter(
       (rule) => rule.permission === "external_directory" || rule.action === "deny",
     ),
+    { permission: "question" as const, pattern: "*" as const, action: "deny" as const },
     ...(canTodo ? [] : [{ permission: "todowrite" as const, pattern: "*" as const, action: "deny" as const }]),
     ...(canTask ? [] : [{ permission: "task" as const, pattern: "*" as const, action: "deny" as const }]),
   ]
